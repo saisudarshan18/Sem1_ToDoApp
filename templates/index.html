@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>To-Do</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="page">
+    <div class="layout">
+        <main class="main">
+            <header class="topbar">
+                <div class="title-group">
+                    <h1>TO-DO</h1>
+                    <span class="muted">{{ now.strftime('%A %d %b %Y, %I:%M %p') }}</span>
+                </div>
+            </header>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <ul class="flashes">
+                        {% for category, message in messages %}
+                            <li class="{{ category }}">{{ message }}</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+            {% endwith %}
+
+            <div class="dashboard" id="calendar-data" data-reminders="{% for task in tasks if task.reminder_time %}{{ task.reminder_time.strftime('%Y-%m-%d') }}{% if not loop.last %},{% endif %}{% endfor %}">
+                <section class="card calendar-card">
+                    <div class="card-header">
+                        <div>
+                            <h3>Calendar</h3>
+                            <p class="muted">Quick glance at reminders</p>
+                        </div>
+                        <div class="nav-buttons">
+                            <button id="prev-month">‹</button>
+                            <div id="month-label"></div>
+                            <button id="next-month">›</button>
+                        </div>
+                    </div>
+                    <div class="calendar">
+                        <div class="calendar-days">
+                            <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+                        </div>
+                        <div class="calendar-grid" id="calendar-grid"></div>
+                    </div>
+                    {% if upcoming_tasks %}
+                    <div class="mini-upcoming">
+                        <h4>To be done</h4>
+                        <ul>
+                            {% for task in upcoming_tasks %}
+                                <li>{{ task.title }} by {{ task.reminder_time.strftime('%I:%M %p') }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                    <div id="date-tasks" class="date-tasks" style="display: none;">
+                        <h4 id="date-tasks-title"></h4>
+                        <ul id="date-tasks-list"></ul>
+                    </div>
+                </section>
+
+                <section class="card tasks-card">
+                    <div class="card-header">
+                        <h3>Task List</h3>
+                        <form id="sort-form" method="GET" class="sort-form">
+                            <label for="sort">Sort by:</label>
+                            <select name="sort" id="sort">
+                                <option value="date" {% if sort == 'date' %}selected{% endif %}>Date</option>
+                                <option value="az" {% if sort == 'az' %}selected{% endif %}>A - Z</option>
+                                <option value="za" {% if sort == 'za' %}selected{% endif %}>Z - A</option>
+                            </select>
+                        </form>
+                    </div>
+
+                    {% if edit_task %}
+                    <form id="task-form" action="{{ url_for('update', id=edit_task.id) }}" method="POST" class="task-form">
+                        <input type="text" name="title" value="{{ edit_task.title }}" required>
+                        <input type="time" name="from_time" value="{{ edit_task.from_time or '' }}">
+                        <input type="time" name="to_time" value="{{ edit_task.to_time or '' }}">
+                        <input type="datetime-local" name="reminder_time" value="{{ edit_task.reminder_time.strftime('%Y-%m-%dT%H:%M') if edit_task.reminder_time else '' }}">
+                        <button type="submit">Save Changes</button>
+                    </form>
+                    {% else %}
+                    <form id="task-form" action="{{ url_for('add') }}" method="POST" class="task-form">
+                        <input type="text" name="title" placeholder="Enter new task" required>
+                        <input type="time" name="from_time" placeholder="From time">
+                        <input type="time" name="to_time" placeholder="To time">
+                        <input type="datetime-local" name="reminder_time" placeholder="Reminder time">
+                        <button type="submit">Add Task</button>
+                    </form>
+                    {% endif %}
+
+                    <ul class="task-list">
+                        {% for task in tasks %}
+                        <li class="{{ 'done' if task.completed }}">
+                            <div class="task-main">
+                                <div class="task-title">{{ task.title }}</div>
+                                <div class="task-meta">
+                                    {% if task.from_time or task.to_time %}
+                                        <span>{{ task.from_time or '' }}{% if task.from_time and task.to_time %}-{% endif %}{{ task.to_time or '' }}</span>
+                                    {% endif %}
+                                    {% if task.reminder_time %}
+                                        <span>Reminder: {{ task.reminder_time.strftime('%d %b %Y %I:%M %p') }}</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="actions">
+                                {% if not task.completed %}
+                                <a href="{{ url_for('toggle', id=task.id, sort=sort) }}" class="complete">Mark as Completed</a>
+                                {% else %}
+                                <a href="{{ url_for('toggle', id=task.id, sort=sort) }}" class="incomplete">Mark as Incomplete</a>
+                                {% endif %}
+                                <a href="{{ url_for('edit', id=task.id, sort=sort) }}">Edit</a>
+                                <a href="{{ url_for('delete', id=task.id, sort=sort) }}" class="delete">Delete</a>
+                            </div>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const reminderData = document.getElementById('calendar-data');
+        const reminders = (reminderData?.dataset.reminders || '').split(',').filter(Boolean);
+
+        const monthLabel = document.getElementById('month-label');
+        const grid = document.getElementById('calendar-grid');
+        let current = new Date();
+
+        function renderCalendar(date) {
+            const year = date.getFullYear();
+            const month = date.getMonth();
+            const firstDay = new Date(year, month, 1);
+            const startDay = firstDay.getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+            monthLabel.textContent = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+            grid.innerHTML = '';
+
+            for (let i = 0; i < startDay; i++) {
+                const empty = document.createElement('div');
+                empty.className = 'day empty';
+                grid.appendChild(empty);
+            }
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const cell = document.createElement('div');
+                cell.className = 'day';
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                cell.textContent = day;
+                cell.dataset.date = dateStr;
+                cell.style.cursor = 'pointer';
+
+                if (reminders.includes(dateStr)) {
+                    const dot = document.createElement('span');
+                    dot.className = 'dot';
+                    cell.appendChild(dot);
+                }
+
+                if (day === new Date().getDate() && month === new Date().getMonth() && year === new Date().getFullYear()) {
+                    cell.classList.add('today');
+                }
+
+                cell.addEventListener('click', () => {
+                    loadTasksForDate(dateStr);
+                });
+
+                grid.appendChild(cell);
+            }
+        }
+
+        document.getElementById('prev-month').addEventListener('click', () => {
+            current.setMonth(current.getMonth() - 1);
+            renderCalendar(current);
+        });
+
+        document.getElementById('next-month').addEventListener('click', () => {
+            current.setMonth(current.getMonth() + 1);
+            renderCalendar(current);
+        });
+
+        document.getElementById('sort')?.addEventListener('change', () => {
+            document.getElementById('sort-form').submit();
+        });
+
+        function loadTasksForDate(dateStr) {
+            const dateTasksDiv = document.getElementById('date-tasks');
+            const dateTasksTitle = document.getElementById('date-tasks-title');
+            const dateTasksList = document.getElementById('date-tasks-list');
+            
+            const date = new Date(dateStr + 'T00:00:00');
+            const formattedDate = date.toLocaleDateString('en-US', { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+            
+            dateTasksTitle.textContent = `Tasks for ${formattedDate}`;
+            dateTasksList.innerHTML = '<li>Loading...</li>';
+            dateTasksDiv.style.display = 'block';
+            
+            fetch(`/api/tasks/${dateStr}`)
+                .then(response => response.json())
+                .then(tasks => {
+                    dateTasksList.innerHTML = '';
+                    
+                    if (tasks.length === 0) {
+                        const emptyMsg = document.createElement('li');
+                        emptyMsg.className = 'empty-message';
+                        emptyMsg.textContent = 'Hooray!!! You are free!!!';
+                        dateTasksList.appendChild(emptyMsg);
+                    } else {
+                        tasks.forEach(task => {
+                            const li = document.createElement('li');
+                            li.className = task.completed ? 'done' : '';
+                            
+                            const taskTitle = document.createElement('div');
+                            taskTitle.className = 'task-title';
+                            taskTitle.textContent = task.title;
+                            li.appendChild(taskTitle);
+                            
+                            const taskMeta = document.createElement('div');
+                            taskMeta.className = 'task-meta';
+                            
+                            if (task.from_time || task.to_time) {
+                                const timeSpan = document.createElement('span');
+                                timeSpan.textContent = `${task.from_time || ''}${task.from_time && task.to_time ? '-' : ''}${task.to_time || ''}`;
+                                taskMeta.appendChild(timeSpan);
+                            }
+                            
+                            if (task.reminder_time) {
+                                const reminderSpan = document.createElement('span');
+                                reminderSpan.textContent = `Reminder: ${task.reminder_time}`;
+                                taskMeta.appendChild(reminderSpan);
+                            }
+                            
+                            if (taskMeta.children.length > 0) {
+                                li.appendChild(taskMeta);
+                            }
+                            
+                            dateTasksList.appendChild(li);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading tasks:', error);
+                    dateTasksList.innerHTML = '<li class="error">Error loading tasks</li>';
+                });
+        }
+
+        renderCalendar(current);
+    </script>
+</body>
+</html>
